@@ -1,0 +1,1127 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Balloon Postcard</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600&family=Nunito:wght@500;700&display=swap">
+<style>
+/* Layout: one full-screen 3D stage with nothing but the card. Single dusk look by choice. */
+:root {
+  --sky-top: #2a2340;      /* dusk violet, like the dark exhibition room */
+  --sky-bottom: #5b4a6e;
+  --glow: #f3c9a6;         /* warm lamp light */
+  --ink: #f7f1ea;          /* paper-white text */
+  --ink-soft: rgba(247, 241, 234, .62);
+  --accent: #b98cff;       /* the purple balloon */
+  --font-display: "Fraunces", Georgia, "Songti SC", serif;
+  --font-body: "Nunito", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  margin: 0; overflow: hidden;
+  background: radial-gradient(120% 90% at 70% 15%, #6d5a7c 0%, var(--sky-bottom) 30%, var(--sky-top) 100%);
+  color: var(--ink); font-family: var(--font-body);
+}
+#stage { position: fixed; inset: 0; }
+#stage canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+</style>
+
+<div id="stage"></div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
+
+const CHILD_URL = 'child-model.txt';   // the rigged raincoat child (.glb as base64 text, published next to this page)
+
+/* ================================================================
+   CONFIG — 以后在这里改文字就行（留空 '' 会显示虚线占位框）
+   ================================================================ */
+const CONFIG = {
+  front: {
+    title: '',          // 例如 'Shared Experiences'
+    subtitle: '',       // 例如 'Choose a colour. Read a project. Feel its emotion.'
+    lines: [],          // 例如 ['Eight colours.', 'Eight student stories.']
+  },
+  back: {
+    heading: 'Keep in touch',
+    name: '',           // 例如 'Alex Chen'
+    email: '',          // 例如 'alex.chen@rca.ac.uk'
+    social: '',         // 例如 '@alexcreates'
+    project: '',        // 例如 'A Quieter Tomorrow'
+  },
+  showPlaceholders: false,  // true = show dashed boxes where text will go
+  // 八种情绪颜色 —— 对应装置里的八个气球
+  balloonColors: ['#ff9a3c', '#3d6bff', '#a259ff', '#2fd3c9', '#ff3b4e', '#3fcf6a', '#ff5fae', '#fff6ea'],
+  autoReleaseEvery: 4.5,       // 秒，0 = 关闭自动放飞
+};
+
+/* ---------------- renderer / scene ---------------- */
+const stage = document.getElementById('stage');
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 0.95;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+stage.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(renderer), 0.04).texture;
+scene.environmentIntensity = 0.55;
+
+const camera = new THREE.PerspectiveCamera(34, innerWidth / innerHeight, 0.1, 200);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.07;
+controls.enablePan = false;
+controls.enableRotate = false; // dragging turns the card itself (see below); the controls only zoom
+controls.minDistance = 8;
+controls.maxDistance = 40;
+controls.target.set(0, 0, 0); // look straight at the card's centre, which is also its pivot
+
+function fitCamera() {
+  const aspect = innerWidth / innerHeight;
+  const dist = 19 * Math.max(1, 1.3 / aspect);
+  const dir = new THREE.Vector3(0, 0.12, 1).normalize();
+  camera.position.copy(controls.target).addScaledVector(dir, dist);
+  camera.aspect = aspect;
+  camera.updateProjectionMatrix();
+}
+fitCamera();
+
+/* lights: warm key (reading lamp), cool fill, soft hemisphere */
+scene.add(new THREE.HemisphereLight(0xd9d2ff, 0x8a7690, 0.75));
+const key = new THREE.DirectionalLight(0xffe2c4, 2.4);
+key.position.set(-6, 12, 7);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+key.shadow.camera.left = -9; key.shadow.camera.right = 9;
+key.shadow.camera.top = 9; key.shadow.camera.bottom = -9;
+key.shadow.camera.near = 1; key.shadow.camera.far = 40;
+key.shadow.bias = -0.0004;
+key.shadow.radius = 6;
+scene.add(key);
+// a second, softer key from below so the back side (hanging under the card) is lit and gets its own shadows
+const under = new THREE.DirectionalLight(0xffe9d6, 1.5);
+under.position.set(5, -11, 6);
+under.castShadow = true;
+under.shadow.mapSize.set(1024, 1024);
+Object.assign(under.shadow.camera, { left: -9, right: 9, top: 9, bottom: -9, near: 1, far: 40 });
+under.shadow.bias = -0.0004;
+scene.add(under);
+const rim = new THREE.DirectionalLight(0xb9a6ff, 1.1);
+rim.position.set(7, 5, -8);
+scene.add(rim);
+
+/* ---------------- textures ---------------- */
+function noiseTexture(size = 256, strength = 40) {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const g = c.getContext('2d');
+  const img = g.createImageData(size, size);
+  for (let i = 0; i < size * size; i++) {
+    const v = 128 + (Math.random() - 0.5) * strength;
+    img.data[i * 4] = img.data[i * 4 + 1] = img.data[i * 4 + 2] = v; img.data[i * 4 + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  // soft blotches = fingerprint-ish clay
+  for (let i = 0; i < 140; i++) {
+    g.fillStyle = `rgba(${Math.random() < .5 ? 0 : 255},${0},${0},0)`;
+    const x = Math.random() * size, y = Math.random() * size, r = 4 + Math.random() * 14;
+    const grd = g.createRadialGradient(x, y, 0, x, y, r);
+    const tone = Math.random() < .5 ? '0,0,0' : '255,255,255';
+    grd.addColorStop(0, `rgba(${tone},.10)`); grd.addColorStop(1, `rgba(${tone},0)`);
+    g.fillStyle = grd; g.beginPath(); g.arc(x, y, r, 0, Math.PI * 2); g.fill();
+  }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  return t;
+}
+const clayBump = noiseTexture(256, 34);
+clayBump.repeat.set(2, 2);
+
+function clay(color, opts = {}) {
+  return new THREE.MeshStandardMaterial({
+    color, roughness: 0.82, metalness: 0, bumpMap: clayBump, bumpScale: 0.6, envMapIntensity: 0.6, ...opts,
+  });
+}
+
+/* ---------------- card ---------------- */
+const CARD_W = 10, CARD_D = 6.4, CARD_T = 0.16;
+// the card turns about its own centre: yaw spins it flat, pitch flips it over the screen's horizontal axis.
+// At rest it leans toward the viewer by REST_PITCH, so the face on top and the side underneath are both in view.
+const REST_PITCH = 0.3, START_YAW = -0.5;
+const cardTilt = new THREE.Group();
+scene.add(cardTilt);
+const card = new THREE.Group();
+cardTilt.add(card);
+
+const paperMat = clay('#f3ece2', { roughness: 0.95, bumpScale: 0.3 });
+const edgeMat = clay('#d8cbbb', { roughness: 0.95 });
+const cardBase = new THREE.Mesh(new RoundedBoxGeometry(CARD_W, CARD_T, CARD_D, 4, 0.07), [edgeMat, edgeMat, paperMat, paperMat, edgeMat, edgeMat]);
+cardBase.receiveShadow = true; cardBase.castShadow = true;
+card.add(cardBase);
+
+const front = new THREE.Group(); front.position.y = CARD_T / 2; card.add(front);
+const back = new THREE.Group(); back.position.y = -CARD_T / 2; back.rotation.x = Math.PI; card.add(back);
+
+/* ---------------- terrain: rolling clay hills on both sides (like the diorama card) ---------------- */
+const PW = CARD_W - 0.12, PD = CARD_D - 0.12;
+const gauss = (x, z, cx, cz, a, r) => a * Math.exp(-((x - cx) ** 2 + (z - cz) ** 2) / (r * r));
+const sstep = (e0, e1, v) => { const k = THREE.MathUtils.clamp((v - e0) / (e1 - e0), 0, 1); return k * k * (3 - 2 * k); };
+// 1 inside the rectangle, fading to 0 over distance f outside it
+const rectMask = (x, z, x0, x1, z0, z1, f = 0.5) => {
+  const dx = Math.max(x0 - x, 0, x - x1), dz = Math.max(z0 - z, 0, z - z1);
+  return 1 - sstep(0, f, Math.hypot(dx, dz));
+};
+const ripple = (x, z) => 0.06 * (Math.sin(x * 2.3 + 0.7) * Math.cos(z * 2.7 - 0.4) + 0.5 * Math.sin(x * 4.3 + z * 3.1));
+const BASE_H = 0.14;
+// hills rise from inside the card, so its edge stays a thin slab and both faces read clearly
+const edgeFade = (x, z) => sstep(0, 0.9, Math.min(PW / 2 - Math.abs(x), PD / 2 - Math.abs(z)));
+const POND = { x: 3.3, z: -0.25, level: 0.09 };
+const FRONT_TEXT = [-4.55, -0.75, -1.05, 2.7];   // x0, x1, z0, z1 — flat clearing for the front text
+const BACK_TEXT = [-4.6, -0.35, -2.95, 2.85];    // flat clearing for contact details
+const STAMP = [3.45, 4.6, 1.45, 2.85];
+const HERO_XZ = [1.6, 0.7];
+
+// heights for the front side: a ridge of hills behind, a pond, flat ground for the text and the character
+function hFront(x, z) {
+  let h = 1.5 * sstep(-1.0, -3.1, z) * (0.6 + 0.4 * Math.sin(x * 0.9 + 1.2));
+  h += gauss(x, z, -3.7, -2.7, 1.3, 1.25) + gauss(x, z, -0.8, -2.9, 0.9, 1.0) + gauss(x, z, 3.4, -2.9, 1.3, 1.3);
+  h += gauss(x, z, 4.8, 1.9, 0.8, 0.95) + gauss(x, z, -4.9, -0.7, 0.55, 0.85) + gauss(x, z, 0.5, 2.3, 0.6, 0.8) + gauss(x, z, 3.0, 2.45, 0.5, 0.7); // two small hills at the front
+  h += 0.22 * Math.max(0, Math.sin(x * 1.15 + 0.4) * Math.cos(z * 1.3 - 0.2));
+  h += ripple(x, z);
+  const flat = Math.max(
+    rectMask(x, z, ...FRONT_TEXT, 0.6),
+    rectMask(x, z, 0.9, 2.3, 0.1, 1.4, 0.7),      // where the character stands
+    rectMask(x, z, 3.3, 4.1, 1.5, 2.3, 0.4)        // story books
+  );
+  h *= 1 - flat;
+  h -= gauss(x, z, POND.x, POND.z, 0.3, 0.78);
+  return BASE_H + Math.max(h, -0.2) * edgeFade(x, z);
+}
+// heights for the back side: hills along the far edge on the right, the left half stays flat for writing
+function hBack(x, z) {
+  let h = 1.45 * sstep(-1.0, -3.1, z) * sstep(-0.3, 1.2, x) * (0.65 + 0.35 * Math.sin(x * 1.3));
+  h += gauss(x, z, 1.4, -2.9, 1.0, 1.0) + gauss(x, z, 4.8, 0.2, 1.1, 1.0) + gauss(x, z, 4.4, -2.6, 0.8, 1.0);
+  h += 0.2 * Math.max(0, Math.sin(x * 1.3) * Math.cos(z * 1.2 + 0.5));
+  h += ripple(x + 3, z - 1);
+  const flat = Math.max(
+    rectMask(x, z, ...BACK_TEXT, 0.35),
+    rectMask(x, z, ...STAMP, 0.3),
+    rectMask(x, z, 0.4, 3.0, -0.6, 1.8, 0.6)       // chair + table
+  );
+  h *= 1 - flat;
+  return BASE_H + h * edgeFade(x, z);
+}
+
+const PRINT_PX = 220; // texture pixels per world unit
+const px = (x) => (x + PW / 2) * PRINT_PX;
+const pz = (z) => (z + PD / 2) * PRINT_PX;
+function makePrintCanvas() {
+  const c = document.createElement('canvas');
+  c.width = Math.round(PW * PRINT_PX); c.height = Math.round(PD * PRINT_PX);
+  return c;
+}
+const hex2rgb = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16));
+const TERRAIN_STOPS = [[-0.2, '#a38c5c'], [0.08, '#c9b47c'], [0.15, '#4e7b35'], [0.45, '#46722f'], [0.95, '#3b642b'], [1.65, '#2f5326']].map(([h, c]) => [h, hex2rgb(c)]);
+function colorForH(h) {
+  for (let i = 1; i < TERRAIN_STOPS.length; i++) {
+    const [h1, c1] = TERRAIN_STOPS[i], [h0, c0] = TERRAIN_STOPS[i - 1];
+    if (h <= h1 || i === TERRAIN_STOPS.length - 1) {
+      const k = THREE.MathUtils.clamp((h - h0) / (h1 - h0), 0, 1);
+      return c0.map((v, j) => v + (c1[j] - v) * k);
+    }
+  }
+}
+// paints the ground colour from the height map (meadow, sand at the pond, darker greens on the hilltops)
+function paintTerrain(g, W, H, hfn) {
+  const lw = 440, lh = Math.round(lw * H / W);
+  const c = document.createElement('canvas'); c.width = lw; c.height = lh;
+  const cg = c.getContext('2d');
+  const img = cg.createImageData(lw, lh);
+  for (let j = 0; j < lh; j++) for (let i = 0; i < lw; i++) {
+    const x = (i + 0.5) / lw * PW - PW / 2, z = (j + 0.5) / lh * PD - PD / 2;
+    const h = hfn(x, z);
+    const rgb = colorForH(h);
+    const slope = (hfn(x - 0.06, z - 0.06) - hfn(x + 0.06, z + 0.06)) * 120; // light from the back-left
+    const n = (Math.random() - 0.5) * 8;
+    const o = (j * lw + i) * 4;
+    img.data[o] = rgb[0] + slope + n; img.data[o + 1] = rgb[1] + slope + n; img.data[o + 2] = rgb[2] + slope * 0.8 + n; img.data[o + 3] = 255;
+  }
+  cg.putImageData(img, 0, 0);
+  g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+  g.drawImage(c, 0, 0, W, H);
+  // tiny grass flecks
+  for (let i = 0; i < 9000; i++) {
+    const light = Math.random() < 0.5;
+    g.fillStyle = light ? 'rgba(240,255,220,.10)' : 'rgba(40,80,40,.08)';
+    g.fillRect(Math.random() * W, Math.random() * H, 3, 3);
+  }
+}
+function paperPanel(g, x0, z0, x1, z1) {
+  g.save();
+  g.shadowColor = 'rgba(50,70,40,.28)'; g.shadowBlur = 40; g.shadowOffsetY = 10;
+  g.fillStyle = '#f6f0e5';
+  roundRect(g, px(x0), pz(z0), px(x1) - px(x0), pz(z1) - pz(z0), 40); g.fill();
+  g.restore();
+}
+
+function placeholder(g, x, y, w, h, label) {
+  g.save();
+  g.setLineDash([22, 16]); g.lineWidth = 5; g.strokeStyle = 'rgba(120,100,130,.35)';
+  roundRect(g, x, y, w, h, 28); g.stroke();
+  g.setLineDash([]);
+  g.fillStyle = 'rgba(120,100,130,.45)'; g.font = '600 58px Nunito, "PingFang SC", sans-serif';
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText(label, x + w / 2, y + h / 2);
+  g.restore();
+}
+function roundRect(g, x, y, w, h, r) {
+  g.beginPath(); g.moveTo(x + r, y); g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
+}
+
+function drawFront() {
+  const c = makePrintCanvas(), g = c.getContext('2d'), W = c.width, H = c.height;
+  paintTerrain(g, W, H, hFront);
+  const [tx0, tx1, tz0, tz1] = FRONT_TEXT;
+  paperPanel(g, tx0, tz0, tx1, tz1);
+  const f = CONFIG.front;
+  const x0 = px(tx0 + 0.3), y0 = pz(tz0 + 0.3);
+  const hasText = f.title || f.subtitle || (f.lines && f.lines.length);
+  if (hasText) {
+    g.fillStyle = '#2d2438'; g.textBaseline = 'top';
+    g.font = '600 130px Fraunces, Georgia, serif'; g.fillText(f.title || '', x0, y0);
+    g.font = '400 56px Fraunces, Georgia, serif'; g.fillStyle = '#4a3d56';
+    g.fillText(f.subtitle || '', x0, y0 + 170);
+    g.font = '500 48px Nunito, sans-serif'; g.fillStyle = '#6a5c74';
+    (f.lines || []).forEach((l, i) => g.fillText(l, x0, y0 + 290 + i * 66));
+  } else if (CONFIG.showPlaceholders) {
+    placeholder(g, x0, y0, px(tx1 - 0.3) - x0, pz(tz1 - 0.3) - y0, '正面文字区域 · Text');
+  }
+  return c;
+}
+
+function drawBack() {
+  const c = makePrintCanvas(), g = c.getContext('2d'), W = c.width, H = c.height;
+  paintTerrain(g, W, H, hBack);
+  const [tx0, tx1, tz0, tz1] = BACK_TEXT;
+  paperPanel(g, tx0, tz0, tx1, tz1);
+  // stamp, on its own flat patch
+  const [sx0, sx1, sz0, sz1] = STAMP;
+  const sx = px(sx0 + 0.08), sy = pz(sz0 + 0.08), sw = px(sx1 - 0.08) - sx, sh = pz(sz1 - 0.08) - sy;
+  g.save(); g.shadowColor = 'rgba(50,70,40,.3)'; g.shadowBlur = 24; g.shadowOffsetY = 6;
+  g.fillStyle = '#fbf7f1'; g.fillRect(sx, sy, sw, sh); g.restore();
+  g.save(); g.setLineDash([10, 10]); g.strokeStyle = 'rgba(80,60,90,.45)'; g.lineWidth = 6; g.strokeRect(sx + 8, sy + 8, sw - 16, sh - 16); g.restore();
+  CONFIG.balloonColors.slice(0, 3).forEach((col, i) => {
+    const bx = sx + sw * (0.3 + i * 0.2), by = sy + sh * (0.34 + (i % 2) * 0.08);
+    g.fillStyle = col; g.beginPath(); g.ellipse(bx, by, 26, 32, 0, 0, 7); g.fill();
+    g.strokeStyle = 'rgba(80,60,90,.5)'; g.lineWidth = 2;
+    g.beginPath(); g.moveTo(bx, by + 32); g.lineTo(sx + sw * 0.5, sy + sh * 0.8); g.stroke();
+  });
+  g.fillStyle = 'rgba(80,60,90,.65)'; g.font = '700 26px Nunito, sans-serif'; g.textAlign = 'center';
+  g.fillText('RCA', sx + sw / 2, sy + sh - 22);
+  g.textAlign = 'left';
+
+  const b = CONFIG.back;
+  const x0 = px(tx0 + 0.3);
+  g.fillStyle = '#2d2438'; g.textBaseline = 'top';
+  g.font = '600 112px Fraunces, Georgia, serif';
+  g.fillText(b.heading || '', x0, pz(tz0 + 0.3));
+  g.font = '500 42px Nunito, sans-serif'; g.fillStyle = '#7a6b80';
+  g.fillText('RCA Student Project', x0, pz(tz0 + 0.3) + 140);
+
+  const rows = [['Name', b.name], ['Email', b.email], ['Social', b.social], ['Project', b.project]];
+  rows.forEach(([label, val], i) => {
+    const y = pz(-0.75) + i * 0.82 * PRINT_PX;
+    g.strokeStyle = 'rgba(80,60,90,.22)'; g.lineWidth = 3;
+    g.beginPath(); g.moveTo(x0, y + 74); g.lineTo(px(tx1 - 0.3), y + 74); g.stroke();
+    g.fillStyle = '#9a8ca0'; g.font = '700 30px Nunito, sans-serif';
+    g.fillText(label.toUpperCase(), x0, y - 4);
+    g.fillStyle = val ? '#2d2438' : 'rgba(120,100,130,.35)';
+    g.font = val ? '500 50px Nunito, sans-serif' : '500 40px Nunito, "PingFang SC", sans-serif';
+    g.fillText(val || (CONFIG.showPlaceholders ? '待填写' : ''), x0 + 220, y + 14);
+  });
+  return c;
+}
+
+// earth cross-section around the edges, like a slice of ground
+function makeWalls(hfn) {
+  const R = 6, N = 140, pos = [], col = [], idx = [];
+  const lip = new THREE.Color('#8fbf7f'), soilTop = new THREE.Color('#bf9268'), soilBot = new THREE.Color('#7a523e'), tmpC = new THREE.Color();
+  const sides = [
+    (k) => [-PW / 2 + k * PW, -PD / 2], (k) => [PW / 2, -PD / 2 + k * PD],
+    (k) => [PW / 2 - k * PW, PD / 2], (k) => [-PW / 2, PD / 2 - k * PD],
+  ];
+  sides.forEach((fn) => {
+    const base = pos.length / 3;
+    for (let i = 0; i <= N; i++) {
+      const [x, z] = fn(i / N), h = hfn(x, z);
+      for (let k = 0; k <= R; k++) {
+        const y = k === 0 ? h : (h - 0.05) * (1 - (k - 1) / (R - 1));
+        pos.push(x, y, z);
+        if (k === 0) tmpC.copy(lip);
+        else tmpC.copy(soilTop).lerp(soilBot, (k - 1) / (R - 1)).multiplyScalar(k % 2 ? 1 : 0.92); // soft strata
+        col.push(tmpC.r, tmpC.g, tmpC.b);
+      }
+    }
+    for (let i = 0; i < N; i++) for (let k = 0; k < R; k++) {
+      const a = base + i * (R + 1) + k, b2 = a + R + 1;
+      idx.push(a, b2, a + 1, b2, b2 + 1, a + 1);
+    }
+  });
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  geo.setIndex(idx);
+  geo.computeVertexNormals();
+  const m = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, side: THREE.DoubleSide, bumpMap: clayBump, bumpScale: 0.5 }));
+  m.castShadow = m.receiveShadow = true;
+  return m;
+}
+
+function makeTerrain(hfn, canvas) {
+  const geo = new THREE.PlaneGeometry(PW, PD, 240, 156);
+  geo.rotateX(-Math.PI / 2);
+  const p = geo.attributes.position;
+  for (let i = 0; i < p.count; i++) p.setY(i, hfn(p.getX(i), p.getZ(i)));
+  geo.computeVertexNormals();
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  const top = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9, bumpMap: clayBump, bumpScale: 0.35 }));
+  top.castShadow = top.receiveShadow = true;
+  const grp = new THREE.Group();
+  grp.add(top, makeWalls(hfn));
+  grp.userData.top = top;
+  return grp;
+}
+
+/* little clay trees, bushes and flowers */
+function mulberry32(a) { return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+const trunkGeo = new THREE.CylinderGeometry(0.045, 0.065, 0.26, 10).translate(0, 0.13, 0);
+const coneGeos = [0, 1, 2].map((k) => new THREE.ConeGeometry(0.4 - k * 0.1, 0.5, 20).translate(0, 0.42 + k * 0.27, 0));
+const trunkMat = clay('#9a6a48');
+const pineMats = ['#2f5a35', '#386840', '#2a4f30'].map((c) => clay(c, { roughness: 0.85 }));
+const bushMat = clay('#4f7d3f');
+const stemMat = clay('#6c9a5c');
+const flowerGeo = new THREE.SphereGeometry(0.055, 12, 10);
+const stemGeo = new THREE.CylinderGeometry(0.012, 0.012, 0.36, 6).translate(0, 0.18, 0);
+function makePine(rand) {
+  const g = new THREE.Group();
+  const mat = pineMats[Math.floor(rand() * pineMats.length)];
+  g.add(new THREE.Mesh(trunkGeo, trunkMat));
+  coneGeos.forEach((cg) => g.add(new THREE.Mesh(cg, mat)));
+  g.scale.setScalar(0.55 + rand() * 0.5);
+  g.rotation.y = rand() * 6.28;
+  g.traverse((o) => { if (o.isMesh) o.castShadow = o.receiveShadow = true; });
+  return g;
+}
+function makeBush(rand) {
+  const g = new THREE.Group();
+  [[0, 0.14, 0, 0.2], [0.17, 0.1, 0.05, 0.15], [-0.15, 0.1, -0.03, 0.14]].forEach(([x, y, z, r]) => {
+    const s = new THREE.Mesh(new THREE.SphereGeometry(r, 16, 12), bushMat);
+    s.position.set(x, y, z); s.castShadow = s.receiveShadow = true; g.add(s);
+  });
+  g.scale.setScalar(0.8 + rand() * 0.5);
+  return g;
+}
+const flowerMats = CONFIG.balloonColors.map((c) => clay(c, { roughness: 0.6, emissive: new THREE.Color(c), emissiveIntensity: 0.12 }));
+function makeFlower(rand) {
+  const g = new THREE.Group();
+  g.add(new THREE.Mesh(stemGeo, stemMat));
+  const head = new THREE.Mesh(flowerGeo, flowerMats[Math.floor(rand() * flowerMats.length)]);
+  head.position.y = 0.38; head.castShadow = true; g.add(head);
+  g.scale.setScalar(0.8 + rand() * 0.5);
+  return g;
+}
+function decorate(parent, hfn, seed, pines, bushes, nFlowers, avoid) {
+  const rand = mulberry32(seed);
+  const put = (obj, x, z) => { obj.position.set(x, hfn(x, z) - 0.02, z); parent.add(obj); };
+  pines.forEach(([x, z]) => put(makePine(rand), x, z));
+  bushes.forEach(([x, z]) => put(makeBush(rand), x, z));
+  let placed = 0, tries = 0;
+  while (placed < nFlowers && tries++ < 2000) {
+    const x = (rand() - 0.5) * (PW - 0.4), z = (rand() - 0.5) * (PD - 0.4);
+    if (avoid(x, z) || hfn(x, z) < BASE_H - 0.03) continue;
+    put(makeFlower(rand), x, z); placed++;
+  }
+}
+/* ---------------- the child (rigged GLB, posed by code — the file has bones but no animations) ---------------- */
+const _up = new THREE.Vector3(0, 1, 0);
+const AXIS_X = new THREE.Vector3(1, 0, 0), AXIS_Y = new THREE.Vector3(0, 1, 0), AXIS_Z = new THREE.Vector3(0, 0, 1);
+const HERO_SCALE = 1.55;  // the child is about 0.85 model units tall
+async function loadChild() {
+  const b64 = (await (await fetch(CHILD_URL)).text()).trim();
+  const bin = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0));
+  return new GLTFLoader().parseAsync(bin.buffer, '');
+}
+let childGltf;
+try { childGltf = await loadChild(); }
+catch (err) { console.error('child model failed to load', err); throw err; }
+
+function makeRig(model) {
+  const bones = {};
+  model.traverse((o) => {
+    if (o.name.startsWith('mixamorig')) bones[o.name.replace('mixamorig', '').replace(':', '')] = o; // some rig nodes are not skin joints
+    if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; o.frustumCulled = false; }
+  });
+  model.updateMatrixWorld(true);
+  const rest = {};
+  for (const k in bones) {
+    const b = bones[k];
+    rest[k] = { lq: b.quaternion.clone(), wq: b.getWorldQuaternion(new THREE.Quaternion()), pos: b.getWorldPosition(new THREE.Vector3()) };
+  }
+  const feetNames = ['LeftToeBase', 'RightToeBase', 'LeftFoot', 'RightFoot'];
+  const restFloor = Math.min(...feetNames.map((n) => rest[n].pos.y));
+  return { model, bones, rest, dirs: {}, qInv: new THREE.Quaternion(), feetNames, restFloor };
+}
+const _pq = new THREE.Quaternion(), _rq = new THREE.Quaternion(), _v = new THREE.Vector3();
+function rigBegin(rig) {
+  for (const k in rig.bones) rig.bones[k].quaternion.copy(rig.rest[k].lq);
+  rig.model.updateWorldMatrix(true, false);
+  rig.model.getWorldQuaternion(rig.qInv).invert();
+}
+function parentQ(rig, b) { return _pq.copy(rig.qInv).multiply(b.parent.getWorldQuaternion(_rq)); }
+function restDir(rig, a, c) {
+  const key = a + '>' + c;
+  return rig.dirs[key] || (rig.dirs[key] = rig.rest[c].pos.clone().sub(rig.rest[a].pos).normalize());
+}
+// point bone `a` (towards its child `c`) along `target`, given in the model's own space
+function aim(rig, a, c, target) {
+  const b = rig.bones[a];
+  const R = new THREE.Quaternion().setFromUnitVectors(restDir(rig, a, c), _v.copy(target).normalize());
+  const W = R.multiply(rig.rest[a].wq);
+  b.quaternion.copy(parentQ(rig, b).invert().multiply(W));
+  b.updateMatrixWorld(true);
+}
+// swing bone `a` from its rest direction around a model-space axis
+function swing(rig, a, c, axis, angle) { aim(rig, a, c, restDir(rig, a, c).clone().applyAxisAngle(axis, angle)); }
+// extra rotation on top of the current pose, around a model-space axis
+function turn(rig, a, axis, angle) {
+  const b = rig.bones[a];
+  const P = parentQ(rig, b).clone();
+  const W = P.clone().multiply(b.quaternion);
+  W.premultiply(new THREE.Quaternion().setFromAxisAngle(axis, angle));
+  b.quaternion.copy(P.invert().multiply(W));
+  b.updateMatrixWorld(true);
+}
+// keep the lowest foot on the ground after posing
+function plantFeet(rig) {
+  rig.model.position.y = 0;
+  rig.model.updateMatrixWorld(true);
+  let low = Infinity;
+  rig.feetNames.forEach((n) => { rig.bones[n].getWorldPosition(_v); rig.model.worldToLocal(_v); low = Math.min(low, _v.y); });
+  rig.model.position.y = rig.restFloor - low;
+}
+function makeChild() {
+  const model = cloneSkinned(childGltf.scene);
+  const rig = makeRig(model);
+  const group = new THREE.Group();
+  group.add(model);
+  // invisible, cheap target for clicks (raycasting a skinned mesh is slow)
+  const proxy = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.86, 10).translate(0, 0.43, 0), new THREE.MeshBasicMaterial({ visible: false }));
+  proxy.userData.character = group;
+  group.add(proxy);
+  group.userData = { rig, model, proxy, hop: 0, walk: 0, phase: 0, target: null, yaw: 0 };
+  return group;
+}
+
+/* ---------------- grass: instanced blades swaying in the wind, parting around the child ---------------- */
+const GRASS_LOW = Math.min(innerWidth, innerHeight) < 700 || matchMedia('(pointer: coarse)').matches;
+const grassTime = { value: 0 };
+function bladeGeometry() {
+  const seg = 4, pos = [], nrm = [], idx = [];
+  for (let i = 0; i <= seg; i++) {
+    const y = i / seg, w = 0.5 * (1 - y * 0.94), bend = 0.28 * y * y;
+    pos.push(-w, y, bend, w, y, bend);
+    nrm.push(0, 1, 0.25, 0, 1, 0.25);
+  }
+  for (let i = 0; i < seg; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  g.setIndex(idx);
+  return g;
+}
+const bladeGeo = bladeGeometry();
+function grassMaterial(heroUniform) {
+  const mat = new THREE.MeshLambertMaterial({ side: THREE.DoubleSide });
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uTime = grassTime;
+    sh.uniforms.uHero = heroUniform;
+    sh.vertexShader = 'uniform float uTime;\nuniform vec3 uHero;\nvarying float vH;\n' + sh.vertexShader
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvH = position.y;')
+      .replace('#include <project_vertex>', `
+        vec4 mvPosition = vec4( transformed, 1.0 );
+        #ifdef USE_INSTANCING
+          mvPosition = instanceMatrix * mvPosition;
+          vec2 root = vec2( instanceMatrix[3][0], instanceMatrix[3][2] );
+        #else
+          vec2 root = vec2( 0.0 );
+        #endif
+        float k = vH * vH;
+        float gust = sin( uTime * 0.9 + root.x * 0.35 ) * 0.5 + 0.5;
+        float wv = sin( uTime * 1.8 + root.x * 1.1 + root.y * 0.7 ) * 0.6 + sin( uTime * 3.3 + root.x * 2.7 - root.y * 1.9 ) * 0.25;
+        mvPosition.x += wv * ( 0.05 + 0.07 * gust ) * k;
+        mvPosition.z += wv * 0.03 * k;
+        vec2 away = root - uHero.xz;
+        float dist = length( away );
+        float push = smoothstep( 0.42, 0.05, dist );
+        mvPosition.xz += normalize( away + 1e-4 ) * push * 0.22 * k;
+        mvPosition.y -= push * 0.12 * k;
+        mvPosition = modelViewMatrix * mvPosition;
+        gl_Position = projectionMatrix * mvPosition;`);
+    sh.fragmentShader = 'varying float vH;\n' + sh.fragmentShader
+      .replace('#include <normal_fragment_begin>', '#include <normal_fragment_begin>\nnormal = normalize( vNormal ); // light both sides of a blade the same')
+      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= mix( vec3( 0.42, 0.48, 0.36 ), vec3( 1.08, 1.08, 0.9 ), smoothstep( 0.0, 1.0, vH ) );');
+  };
+  return mat;
+}
+function makeGrass(hfn, count, avoid, seed, heroUniform) {
+  const rand = mulberry32(seed);
+  const mesh = new THREE.InstancedMesh(bladeGeo, grassMaterial(heroUniform), count);
+  mesh.receiveShadow = true;
+  mesh.frustumCulled = false;
+  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), p = new THREE.Vector3(), s = new THREE.Vector3(), c = new THREE.Color();
+  let n = 0, tries = 0;
+  while (n < count && tries++ < count * 4) {
+    const x = (rand() - 0.5) * (PW - 0.06), z = (rand() - 0.5) * (PD - 0.06);
+    if (avoid(x, z)) continue;
+    const h = hfn(x, z);
+    p.set(x, h - 0.01, z);
+    e.set((rand() - 0.5) * 0.35, rand() * Math.PI * 2, (rand() - 0.5) * 0.35);
+    q.setFromEuler(e);
+    const len = 0.13 + Math.pow(rand(), 1.6) * 0.2;
+    s.set(0.03 + rand() * 0.025, len, len);
+    m4.compose(p, q, s);
+    mesh.setMatrixAt(n, m4);
+    c.setHSL(0.24 + rand() * 0.07, 0.5 + rand() * 0.2, 0.26 + rand() * 0.12);
+    if (rand() < 0.06) c.setHSL(0.13 + rand() * 0.04, 0.45, 0.5);  // a few dry, golden blades
+    mesh.setColorAt(n, c);
+    n++;
+  }
+  mesh.count = n;
+  mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  return mesh;
+}
+
+/* ---------------- balloons ---------------- */
+function balloonGeometry() {
+  const pts = [];
+  for (let i = 0; i <= 40; i++) {
+    const th = (i / 40) * Math.PI;
+    const c = Math.cos(th);
+    const y = -c * 0.62;
+    const r = Math.sin(th) * 0.5 * (0.78 + 0.22 * (1 - c) / 2);
+    pts.push(new THREE.Vector2(Math.max(r, 0.0001), y));
+  }
+  const g = new THREE.LatheGeometry(pts, 48);
+  g.translate(0, 0.62, 0); // knot at origin
+  return g;
+}
+const balloonGeo = balloonGeometry();
+const knotGeo = new THREE.ConeGeometry(0.06, 0.09, 12).translate(0, 0.02, 0);
+
+const balloons = [];
+const BALLOON_SCALE = 0.62; // sized to the girl, so she reads as a child holding a bunch of balloons
+const SLOTS = [
+  [-1.75, 1.75, 0.05], [-0.95, 2.45, -0.55], [-0.2, 1.95, 0.55], [0.35, 2.8, -0.2],
+  [1.05, 2.1, 0.25], [1.75, 2.55, -0.6], [-1.3, 3.0, -0.1], [0.9, 3.2, 0.45],
+];
+const stringMatBase = new THREE.MeshStandardMaterial({ color: 0xfff5e8, roughness: 0.6, transparent: true });
+
+function makeBalloon(i) {
+  const col = new THREE.Color(CONFIG.balloonColors[i % CONFIG.balloonColors.length]);
+  const isWhite = col.getHSL({}).l > 0.85;
+  const mat = new THREE.MeshPhysicalMaterial({
+    color: col, roughness: 0.32, metalness: 0, clearcoat: 0.6, clearcoatRoughness: 0.35,
+    emissive: col, emissiveIntensity: isWhite ? 0.15 : 0.55,
+    transparent: true, opacity: 0.93, envMapIntensity: 0.35,
+  });
+  const g = new THREE.Group();
+  const mesh = new THREE.Mesh(balloonGeo, mat);
+  mesh.castShadow = true;
+  const knot = new THREE.Mesh(knotGeo, mat);
+  // a little inner LED glow like the installation
+  const core = new THREE.Mesh(new THREE.SphereGeometry(0.12, 12, 10),
+    new THREE.MeshBasicMaterial({ color: col.clone().lerp(new THREE.Color(1, 1, 1), 0.6), transparent: true, opacity: 0.55, depthWrite: false }));
+  core.position.y = 0.55;
+  const light = new THREE.PointLight(col, 1.6, 4.5, 2);
+  light.position.y = 0.55;
+  g.add(mesh, knot, core, light);
+  const sMat = stringMatBase.clone();
+  const str = new THREE.Mesh(new THREE.BufferGeometry(), sMat);
+  const b = {
+    i, group: g, mesh, mat, core, light, str, sMat,
+    state: 'held', slot: SLOTS[i], phase: Math.random() * 10,
+    pos: new THREE.Vector3(), vel: new THREE.Vector3(), inflate: 1, fade: 1, timer: 0,
+    stringLen: 0, wob: Math.random() * 10,
+  };
+  mesh.userData.balloon = b; knot.userData.balloon = b;
+  balloons.push(b);
+  return b;
+}
+
+function tubeBetween(b, pts) {
+  const curve = new THREE.CatmullRomCurve3(pts);
+  const geo = new THREE.TubeGeometry(curve, 22, 0.011, 5, false);
+  b.str.geometry.dispose();
+  b.str.geometry = geo;
+}
+
+/* ---------------- build front ---------------- */
+const frontPrint = makeTerrain(hFront, drawFront());
+front.add(frontPrint);
+const water = new THREE.Mesh(new THREE.CircleGeometry(1.25, 48),
+  new THREE.MeshPhysicalMaterial({ color: '#4fb3e8', roughness: 0.05, clearcoat: 1, transparent: true, opacity: 0.9, emissive: '#2f8fd0', emissiveIntensity: 0.3, envMapIntensity: 1.3 }));
+water.rotation.x = -Math.PI / 2; water.position.set(POND.x, POND.level, POND.z); water.receiveShadow = true;
+front.add(water);
+decorate(front, hFront, 11,
+  [[-3.3, -2.05], [-1.0, -1.7], [2.2, -2.0], [-4.6, -0.55]], // just a few, spread out on the hillsides
+  [[4.6, 2.6], [4.4, 0.9]],
+  30,
+  (x, z) => rectMask(x, z, ...FRONT_TEXT, 0.2) > 0 || Math.hypot(x - HERO_XZ[0], z - HERO_XZ[1]) < 1.0 || Math.hypot(x - POND.x, z - POND.z) < 1.35 || Math.hypot(x - 3.7, z - 1.9) < 0.6);
+
+const grassHeroFront = { value: new THREE.Vector3(HERO_XZ[0], 0, HERO_XZ[1]) }; // grass parts around the child
+const grassFront = makeGrass(hFront, GRASS_LOW ? 32000 : 70000,
+  (x, z) => rectMask(x, z, ...FRONT_TEXT, 0.05) > 0.5 || hFront(x, z) < POND.level + 0.015 || rectMask(x, z, 3.3, 4.1, 1.5, 2.3, 0) > 0, 5, grassHeroFront);
+front.add(grassFront);
+
+const hero = makeChild();
+hero.position.set(HERO_XZ[0], hFront(...HERO_XZ) - 0.01, HERO_XZ[1]);
+hero.userData.yaw = -0.25;
+hero.scale.setScalar(HERO_SCALE);
+front.add(hero);
+
+// little stack of story booklets next to the character
+const bookColors = ['#a259ff', '#2fd3c9', '#ff9a3c'];
+const books = new THREE.Group();
+bookColors.forEach((c, i) => {
+  const bk = new THREE.Mesh(new RoundedBoxGeometry(0.85, 0.12, 0.62, 2, 0.025), [clay(c), clay(c), clay('#fbf6ee'), clay(c), clay(c), clay(c)]);
+  bk.position.set(0, 0.06 + i * 0.125, 0);
+  bk.rotation.y = (i - 1) * 0.22;
+  bk.castShadow = bk.receiveShadow = true;
+  books.add(bk);
+});
+books.position.set(3.7, hFront(3.7, 1.9) - 0.01, 1.9);
+books.scale.setScalar(0.85);
+front.add(books);
+
+for (let i = 0; i < 8; i++) {
+  const b = makeBalloon(i);
+  front.add(b.group, b.str);
+}
+
+/* ---------------- build back ---------------- */
+const backPrint = makeTerrain(hBack, drawBack());
+back.add(backPrint);
+decorate(back, hBack, 23,
+  [[0.5, -2.8], [1.3, -2.55], [2.1, -2.95], [3.0, -2.5], [3.8, -2.9], [4.6, -1.9], [4.7, -0.3], [4.6, 0.7]],
+  [[3.9, -1.6], [0.6, -1.9], [4.3, 1.2]],
+  22,
+  (x, z) => rectMask(x, z, ...BACK_TEXT, 0.2) > 0 || rectMask(x, z, ...STAMP, 0.2) > 0 || rectMask(x, z, 0.3, 3.1, -0.7, 1.9, 0) > 0);
+const grassBack = makeGrass(hBack, GRASS_LOW ? 24000 : 52000,
+  (x, z) => rectMask(x, z, ...BACK_TEXT, 0.05) > 0.5 || rectMask(x, z, ...STAMP, 0.05) > 0.5, 9, { value: new THREE.Vector3(99, 0, 99) });
+back.add(grassBack);
+
+const wood = clay('#c58b5c', { roughness: 0.75 });
+const woodDark = clay('#a36f47', { roughness: 0.75 });
+const chair = new THREE.Group();
+const SEAT_H = 0.78;
+const CHAIR_SCALE = 0.62;
+const seat = new THREE.Mesh(new RoundedBoxGeometry(1.25, 0.12, 1.05, 3, 0.04), wood);
+seat.position.y = SEAT_H; chair.add(seat);
+[[-0.52, -0.42], [0.52, -0.42], [-0.52, 0.42], [0.52, 0.42]].forEach(([x, z]) => {
+  const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.055, 0.045, SEAT_H, 12), woodDark);
+  leg.position.set(x, SEAT_H / 2, z); chair.add(leg);
+});
+[-0.52, 0.52].forEach((x) => {
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.05, 12), woodDark);
+  post.position.set(x, SEAT_H + 0.52, -0.46); chair.add(post);
+});
+const rail = new THREE.Mesh(new RoundedBoxGeometry(1.25, 0.32, 0.1, 3, 0.05), wood);
+rail.position.set(0, SEAT_H + 0.9, -0.46); chair.add(rail);
+chair.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+chair.position.set(2.2, hBack(2.2, 0.35) - 0.02, 0.35);
+chair.rotation.y = -0.35;
+chair.scale.setScalar(CHAIR_SCALE);
+back.add(chair);
+
+
+// side table with the glowing emotion orb and a booklet
+const table = new THREE.Group();
+const top = new THREE.Mesh(new THREE.CylinderGeometry(0.52, 0.52, 0.08, 36), wood);
+top.position.y = 1.05;
+const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 1.0, 12), woodDark);
+stem.position.y = 0.52;
+const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.36, 0.06, 28), woodDark);
+foot.position.y = 0.03;
+table.add(top, stem, foot);
+const orbBase = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.23, 0.08, 28), woodDark);
+orbBase.position.set(0.1, 1.13, 0.05);
+const orbMat = new THREE.MeshPhysicalMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.8, roughness: 0.35, transmission: 0, clearcoat: 1 });
+const orb = new THREE.Mesh(new THREE.SphereGeometry(0.22, 32, 24), orbMat);
+orb.position.set(0.1, 1.38, 0.05);
+const orbLight = new THREE.PointLight(0xffffff, 2.2, 4, 2);
+orbLight.position.copy(orb.position);
+const booklet = new THREE.Mesh(new RoundedBoxGeometry(0.42, 0.05, 0.56, 2, 0.015), [clay('#a259ff'), clay('#a259ff'), clay('#fbf6ee'), clay('#a259ff'), clay('#a259ff'), clay('#a259ff')]);
+booklet.position.set(-0.22, 1.115, -0.08); booklet.rotation.y = 0.5;
+table.add(orbBase, orb, orbLight, booklet);
+table.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+table.position.set(1.15, hBack(1.15, 0.9) - 0.02, 0.9);
+table.scale.setScalar(0.6);
+back.add(table);
+
+// thought bubble: three dots + clay cloud with a tiny balloon changing colour
+const thought = new THREE.Group();
+const cloudMat = clay('#fbf7f2', { roughness: 0.9 });
+const dots = [0.07, 0.1, 0.14].map((r, i) => {
+  const d = new THREE.Mesh(new THREE.SphereGeometry(r, 18, 14), cloudMat);
+  d.position.set(-0.2 - i * 0.22, 0.25 + i * 0.32, 0.1);
+  d.castShadow = true;
+  thought.add(d);
+  return d;
+});
+const cloud = new THREE.Group();
+[[0, 0, 0, .42], [.42, -.05, 0, .32], [-.42, -.05, 0, .32], [.2, .25, 0, .3], [-.22, .22, 0, .28], [0, -.18, .05, .3]].forEach(([x, y, z, r]) => {
+  const s = new THREE.Mesh(new THREE.SphereGeometry(r, 22, 16), cloudMat);
+  s.position.set(x, y, z); s.scale.z = 0.75; s.castShadow = true; cloud.add(s);
+});
+cloud.position.set(-1.1, 1.55, 0.05);
+thought.add(cloud);
+const miniMat = new THREE.MeshPhysicalMaterial({ color: 0xa259ff, emissive: 0xa259ff, emissiveIntensity: 0.4, roughness: 0.2, clearcoat: 1 });
+const mini = new THREE.Mesh(balloonGeo, miniMat);
+mini.scale.setScalar(0.42);
+mini.position.set(0, -0.2, 0.42);
+cloud.add(mini);
+// the chair is empty now; the thought still lingers above the seat
+thought.position.set(0.05, SEAT_H + 0.25, 0.05);
+thought.scale.setScalar(1.0);
+chair.add(thought);
+
+/* ---------------- interaction state ---------------- */
+
+function release(b) {
+  if (b.state !== 'held' || b.inflate < 0.95) return;
+  b.state = 'flying';
+  // it keeps flying "up" away from the card's face, whichever way the card is turned
+  b.pos.copy(b.group.position);
+  b.vel.set((Math.random() - 0.5) * 0.3, 0.55, (Math.random() - 0.5) * 0.2);
+  b.stringLen = b.stringLen || 1.6;
+}
+function releaseRandom() {
+  const held = balloons.filter((b) => b.state === 'held' && b.inflate > 0.95);
+  if (held.length) release(held[Math.floor(Math.random() * held.length)]);
+}
+function respawn(b) {
+  front.attach(b.group);
+  front.add(b.str);
+  b.state = 'held';
+  b.inflate = 0; b.fade = 1;
+  b.group.position.copy(handLocal);
+  b.group.scale.setScalar(0.05);
+  b.group.quaternion.identity();
+}
+
+/* pointer: tap a balloon / the character */
+const ray = new THREE.Raycaster();
+const ndc = new THREE.Vector2();
+let downAt = null;
+renderer.domElement.addEventListener('pointerdown', (e) => { downAt = [e.clientX, e.clientY]; });
+renderer.domElement.addEventListener('pointerup', (e) => {
+  if (!downAt) return;
+  const moved = Math.hypot(e.clientX - downAt[0], e.clientY - downAt[1]);
+  downAt = null;
+  if (moved > 6) return;
+  const hit = pick(e);
+  if (hit && hit.userData.balloon) release(hit.userData.balloon);
+  else if (hit && hit.userData.character) hit.userData.character.userData.hop = 1;
+  else {
+    // tap anywhere on the card: the child walks there
+    const g = ray.intersectObject(frontPrint.userData.top, false)[0];
+    if (g) walkTo(front.worldToLocal(g.point.clone()));
+  }
+});
+renderer.domElement.addEventListener('pointermove', (e) => {
+  if (e.buttons) return;
+  const hit = pick(e);
+  renderer.domElement.style.cursor = hit ? 'pointer' : 'grab';
+});
+function pick(e) {
+  const r = renderer.domElement.getBoundingClientRect();
+  ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(ndc, camera);
+  const targets = [];
+  balloons.forEach((b) => { if (b.state === 'held') targets.push(b.mesh); });
+  targets.push(hero.userData.proxy, cardBase, backPrint.userData.top); // the card hides what is behind it
+  const hits = ray.intersectObjects(targets, false);
+  const first = hits.length ? hits[0].object : null;
+  return first && (first.userData.balloon || first.userData.character) ? first : null;
+}
+
+/* drag to turn the card all the way round: left/right spins it, up/down flips it; it settles level with either face up */
+let yaw = START_YAW, pitch = REST_PITCH;
+const spin = new THREE.Vector2();          // angular velocity from the last drag (radians per frame)
+const pointers = new Map();
+let dragging = false, idle = 1;
+// when left alone the card slowly turns over and back on its own, so both faces get seen
+const AUTO_DELAY = 2.5, AUTO_SPEED = (Math.PI * 2) / 60;   // seconds before it starts; one full turn every 60 s
+let lastTouch = -AUTO_DELAY, autoSpeed = 0;
+const _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion();
+function turnCard(dx, dy) {
+  yaw += Math.cos(pitch) < 0 ? -dx : dx;   // keep left/right feeling the same when the back is up
+  pitch += dy;
+}
+// nearest resting angle: front up (REST_PITCH) or back up (REST_PITCH + pi), mirror images of each other
+const restPitch = () => REST_PITCH + Math.round((pitch - REST_PITCH) / Math.PI) * Math.PI;
+const el = renderer.domElement;
+el.addEventListener('pointerdown', (e) => {
+  pointers.set(e.pointerId, [e.clientX, e.clientY]);
+  if (pointers.size === 1) { dragging = true; spin.set(0, 0); el.setPointerCapture(e.pointerId); el.style.cursor = 'grabbing'; }
+  else dragging = false; // two fingers: pinch to zoom instead
+});
+el.addEventListener('pointermove', (e) => {
+  const last = pointers.get(e.pointerId);
+  if (!last || !dragging) return;
+  const k = 0.0085;
+  const dx = (e.clientX - last[0]) * k, dy = (e.clientY - last[1]) * k;
+  pointers.set(e.pointerId, [e.clientX, e.clientY]);
+  turnCard(dx, dy);
+  spin.set(dx, dy);
+});
+const endDrag = (e) => { pointers.delete(e.pointerId); if (pointers.size === 0) { dragging = false; el.style.cursor = 'grab'; } };
+el.addEventListener('pointerup', endDrag);
+el.addEventListener('pointercancel', endDrag);
+
+addEventListener('resize', () => {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+});
+
+/* ---------------- animation ---------------- */
+const clock = new THREE.Clock();
+const handLocal = new THREE.Vector3();
+const tmp = new THREE.Vector3(), tmp2 = new THREE.Vector3(), tmpQ = new THREE.Quaternion();
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let introT = 0, autoT = 0, t = 0;
+const easeOutBack = (x) => { const c1 = 1.7, c3 = c1 + 1; return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2); };
+const easeInOut = (x) => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
+
+// start balloons inflated in their slots
+balloons.forEach((b) => { b.group.position.set(HERO_XZ[0] + b.slot[0], 1.5 + b.slot[1], HERO_XZ[1] + b.slot[2]); });
+
+const walkRing = new THREE.Mesh(new THREE.RingGeometry(0.16, 0.22, 40), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0, depthWrite: false }));
+walkRing.rotation.x = -Math.PI / 2;
+front.add(walkRing);
+const lerpAngle = (a, b, k) => a + Math.atan2(Math.sin(b - a), Math.cos(b - a)) * k;
+
+function updateHero(dt) {
+  const u = hero.userData, rig = u.rig;
+  // walking towards the clicked spot
+  if (u.target) {
+    const dx = u.target.x - hero.position.x, dz = u.target.z - hero.position.z, d = Math.hypot(dx, dz);
+    const want = Math.atan2(dx, dz);
+    u.yaw = lerpAngle(u.yaw, want, 1 - Math.exp(-dt * 7));
+    const facing = Math.cos(Math.atan2(Math.sin(want - u.yaw), Math.cos(want - u.yaw)));
+    if (d < 0.04) u.target = null;
+    else {
+      const step = Math.min(d, 0.8 * dt * u.walk * Math.max(facing, 0));
+      hero.position.x += (dx / d) * step; hero.position.z += (dz / d) * step;
+    }
+  }
+  u.walk = THREE.MathUtils.lerp(u.walk, u.target ? 1 : 0, 1 - Math.exp(-dt * 6));
+  u.phase += dt * 7.6 * u.walk;
+  u.hop = Math.max(0, u.hop - dt * 1.8);
+  const hopY = u.hop > 0 ? Math.sin((1 - u.hop) * Math.PI) * 0.22 : 0;
+  hero.rotation.y = u.yaw;
+  hero.position.y = hFront(hero.position.x, hero.position.z) - 0.01 + hopY;
+  grassHeroFront.value.copy(hero.position);
+  walkRing.material.opacity = Math.max(0, walkRing.material.opacity - dt * 0.9);
+
+  // pose
+  rigBegin(rig);
+  const w = u.walk, sn = Math.sin(u.phase), cs = Math.cos(u.phase), A = 0.42 * w;
+  turn(rig, 'Spine', AXIS_Y, 0.1 * w * sn);
+  turn(rig, 'Spine', AXIS_X, 0.06 * w);                                  // lean into the walk
+  swing(rig, 'LeftUpLeg', 'LeftLeg', AXIS_X, -A * sn);
+  swing(rig, 'LeftLeg', 'LeftFoot', AXIS_X, -A * sn + 0.7 * w * Math.max(0, cs));
+  swing(rig, 'RightUpLeg', 'RightLeg', AXIS_X, A * sn);
+  swing(rig, 'RightLeg', 'RightFoot', AXIS_X, A * sn + 0.7 * w * Math.max(0, -cs));
+  // left hand swings when walking; the raised right hand keeps holding the balloon strings
+  const armSwing = 0.38 * w * sn + 0.05 * Math.sin(t * 1.3) * (1 - w);
+  swing(rig, 'LeftArm', 'LeftForeArm', AXIS_X, armSwing);
+  swing(rig, 'LeftForeArm', 'LeftHand', AXIS_X, armSwing - 0.2 * w);
+  swing(rig, 'RightForeArm', 'RightHand', AXIS_Z, Math.sin(t * 1.6) * 0.06);
+  // he looks up at the balloons when standing, ahead when walking
+  turn(rig, 'Head', AXIS_X, -0.22 * (1 - w) + Math.sin(t * 0.8) * 0.04);
+  turn(rig, 'Head', AXIS_Y, Math.sin(t * 0.5) * 0.18 * (1 - w));
+  plantFeet(rig);
+}
+function walkTo(p) {
+  const m = 0.35;
+  const x = THREE.MathUtils.clamp(p.x, -PW / 2 + m, PW / 2 - m), z = THREE.MathUtils.clamp(p.z, -PD / 2 + m, PD / 2 - m);
+  const target = new THREE.Vector3(x, 0, z);
+  const toPond = Math.hypot(x - POND.x, z - POND.z);
+  if (toPond < 1.2) { // stop at the water's edge
+    target.x = POND.x + (x - POND.x) / (toPond || 1) * 1.2;
+    target.z = POND.z + (z - POND.z) / (toPond || 1) * 1.2;
+  }
+  hero.userData.target = target;
+  walkRing.position.set(target.x, hFront(target.x, target.z) + 0.03, target.z);
+  walkRing.material.opacity = 0.85;
+}
+
+function updateBack(dt) {
+  // thought bubble breathes, dots pulse in sequence
+  dots.forEach((d, i) => d.scale.setScalar(1 + Math.max(0, Math.sin(t * 3 - i * 0.9)) * 0.25));
+  cloud.position.y = 1.55 + Math.sin(t * 1.2) * 0.06;
+  cloud.rotation.z = Math.sin(t * 0.8) * 0.04;
+  // the mini balloon cycles through the eight emotions
+  const n = CONFIG.balloonColors.length, k = (t / 1.6) % n, a = Math.floor(k), f = k - a;
+  const c = new THREE.Color(CONFIG.balloonColors[a]).lerp(new THREE.Color(CONFIG.balloonColors[(a + 1) % n]), easeInOut(Math.min(f * 2.2, 1)));
+  miniMat.color.copy(c); miniMat.emissive.copy(c);
+  mini.rotation.z = Math.sin(t * 2) * 0.15;
+  mini.position.y = -0.2 + Math.sin(t * 2.1) * 0.05;
+  // the orb on the table glows in the same colour, pulsing gently (author's preset)
+  orbMat.emissive.copy(c).lerp(new THREE.Color(1, 1, 1), 0.45);
+  orbMat.emissiveIntensity = 0.65 + Math.sin(t * 2.0) * 0.25;
+  orbLight.color.copy(c);
+  orbLight.intensity = 2 + Math.sin(t * 2.0) * 0.6;
+}
+
+function updateBalloons(dt) {
+  // hand position in `front` space
+  hero.updateMatrixWorld(true);
+  hero.userData.rig.bones.RightHand.getWorldPosition(handLocal); // the raised hand that held the model's own balloon
+  front.worldToLocal(handLocal);
+  handLocal.y += 0.02;
+
+  balloons.forEach((b) => {
+    if (b.state === 'held') {
+      b.inflate = Math.min(1, b.inflate + dt * 0.9);
+      const s = easeOutBack(b.inflate);
+      b.group.scale.setScalar(Math.max(0.05, s) * BALLOON_SCALE);
+      const sway = tmp.set(
+        Math.sin(t * 0.8 + b.phase) * 0.14,
+        Math.sin(t * 1.1 + b.phase * 1.3) * 0.08,
+        Math.cos(t * 0.7 + b.phase) * 0.12
+      );
+      const target = tmp2.copy(handLocal).add(new THREE.Vector3(...b.slot).multiplyScalar((0.35 + 0.65 * b.inflate) * 0.72)).add(sway);
+      b.group.position.lerp(target, 1 - Math.exp(-dt * (b.inflate < 1 ? 6 : 2.5)));
+      // lean so the knot points to the hand
+      const dir = new THREE.Vector3().subVectors(b.group.position, handLocal).normalize();
+      tmpQ.setFromUnitVectors(_up, dir);
+      b.group.quaternion.slerp(tmpQ, 1 - Math.exp(-dt * 4));
+      // string: hand -> knot with a soft sag
+      const knotP = b.group.position;
+      const mid = new THREE.Vector3().lerpVectors(handLocal, knotP, 0.5);
+      mid.x += Math.sin(t * 1.3 + b.phase) * 0.06;
+      mid.z += 0.04;
+      b.stringLen = handLocal.distanceTo(knotP);
+      tubeBetween(b, [handLocal.clone(), mid, knotP.clone()]);
+      b.mat.opacity = 0.93; b.sMat.opacity = 1;
+      b.light.intensity = THREE.MathUtils.lerp(b.light.intensity, 1.6 * b.inflate, 0.1);
+    } else {
+      // flying: rise, accelerate, drift, wobble, fade at the top
+      b.vel.y = Math.min(b.vel.y + dt * 0.45, 1.6);
+      b.vel.x += Math.sin(t * 0.9 + b.phase) * dt * 0.15;
+      b.pos.addScaledVector(b.vel, dt);
+      b.group.position.copy(b.pos);
+      b.wob += dt;
+      tmpQ.setFromEuler(new THREE.Euler(Math.sin(b.wob * 1.7) * 0.18, b.wob * 0.4, Math.sin(b.wob * 1.3) * 0.22));
+      b.group.quaternion.slerp(tmpQ, 0.1);
+      const fadeStart = 7.2, fadeEnd = 11.5;
+      b.fade = 1 - THREE.MathUtils.clamp((b.pos.y - fadeStart) / (fadeEnd - fadeStart), 0, 1);
+      b.mat.opacity = 0.93 * b.fade; b.sMat.opacity = b.fade;
+      b.core.material.opacity = 0.55 * b.fade;
+      b.group.scale.setScalar((0.75 + 0.25 * b.fade) * BALLOON_SCALE);
+      b.light.intensity = 1.6 * b.fade;
+      // dangling string below
+      const L = Math.min(b.stringLen, 1.8) * b.group.scale.x;
+      const k = b.pos.clone();
+      const p1 = k.clone().add(new THREE.Vector3(Math.sin(b.wob * 2.3) * 0.12, -L * 0.5, Math.cos(b.wob * 1.9) * 0.08));
+      const p2 = k.clone().add(new THREE.Vector3(Math.sin(b.wob * 2.3 + 1) * 0.25 - b.vel.x * 0.3, -L, Math.cos(b.wob * 1.9 + 1) * 0.15));
+      tubeBetween(b, [k, p1, p2]);
+      if (b.fade <= 0) {
+        b.timer += dt;
+        if (b.timer > 0.6) { b.timer = 0; respawn(b); b.core.material.opacity = 0.55; }
+      }
+    }
+  });
+}
+
+function tick() {
+  const dt = Math.min(clock.getDelta(), 0.05);
+  t += dt;
+
+  // intro: card rises and settles, characters pop
+  if (introT < 1) {
+    introT = Math.min(1, introT + dt / 1.6);
+    const e = easeOutBack(introT);
+    card.position.y = -2 * (1 - e);
+    card.scale.setScalar(0.6 + 0.4 * e);
+    hero.scale.setScalar(HERO_SCALE * (easeOutBack(THREE.MathUtils.clamp(introT * 1.6 - 0.4, 0, 1)) || 0.001));
+  }
+
+
+  // free rotation: inertia after a drag, then the card eases back level (either face up), then a gentle idle sway
+  if (!dragging && spin.lengthSq() > 1e-8) { turnCard(spin.x, spin.y); spin.multiplyScalar(Math.pow(0.9, dt * 60)); }
+  const moving = dragging || spin.lengthSq() > 1e-4;
+  if (moving || introT < 1) lastTouch = t;
+  const turning = !moving && !reduceMotion && t - lastTouch >= AUTO_DELAY;
+  // a slow, steady turn over and over; it eases in and out of motion so it never jerks
+  autoSpeed = THREE.MathUtils.lerp(autoSpeed, turning ? AUTO_SPEED : 0, 1 - Math.exp(-dt * 1.2));
+  pitch += autoSpeed * dt;
+  if (!moving && !turning) pitch += (restPitch() - pitch) * (1 - Math.exp(-dt * 3)); // settle level after a drag
+  idle = THREE.MathUtils.lerp(idle, dragging || spin.lengthSq() > 1e-6 ? 0 : 1, 1 - Math.exp(-dt * 0.8));
+  const sway = reduceMotion ? 0 : Math.sin(t * 0.35) * 0.12 * idle;
+  cardTilt.quaternion.copy(_qa.setFromAxisAngle(AXIS_X, pitch)).multiply(_qb.setFromAxisAngle(AXIS_Y, yaw + sway));
+
+  grassTime.value = t;
+  updateHero(dt);
+  updateBack(dt);
+  updateBalloons(dt);
+
+  if (CONFIG.autoReleaseEvery > 0 && !reduceMotion) {
+    autoT += dt;
+    if (autoT > CONFIG.autoReleaseEvery) { autoT = 0; releaseRandom(); }
+  }
+
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+
+// wait for webfonts so the printed text uses them, then redraw prints
+(document.fonts ? document.fonts.ready : Promise.resolve()).then(() => {
+  Promise.all([document.fonts?.load('600 60px Fraunces'), document.fonts?.load('500 40px Nunito')]).catch(() => {}).then(() => {
+    frontPrint.userData.top.material.map.image = drawFront(); frontPrint.userData.top.material.map.needsUpdate = true;
+    backPrint.userData.top.material.map.image = drawBack(); backPrint.userData.top.material.map.needsUpdate = true;
+  });
+});
+tick();
+
+// expose for quick tweaks in the console
+window.postcard = { card, cardTilt, hero, camera, controls, CONFIG, release: releaseRandom };
+</script>
+
+</body></html>
